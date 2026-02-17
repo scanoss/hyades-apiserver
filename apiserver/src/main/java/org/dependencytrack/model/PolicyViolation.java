@@ -77,9 +77,14 @@ public class PolicyViolation implements Serializable {
 
     @Persistent(defaultFetchGroup = "true")
     @ForeignKey(name = "POLICYVIOLATION_COMPONENT_FK", updateAction = ForeignKeyAction.NONE, deleteAction = ForeignKeyAction.CASCADE, deferred = "true")
-    @Column(name = "COMPONENT_ID", allowsNull = "false")
+    @Column(name = "COMPONENT_ID", allowsNull = "true")
     @Index(name = "POLICYVIOLATION_COMPONENT_IDX")
     private Component component;
+
+    @Persistent(defaultFetchGroup = "true")
+    @ForeignKey(name = "POLICYVIOLATION_CRYPTOASSET_FK", updateAction = ForeignKeyAction.NONE, deleteAction = ForeignKeyAction.CASCADE, deferred = "true")
+    @Column(name = "CRYPTOASSET_ID", allowsNull = "true")
+    private CryptoAsset cryptoAsset;
 
     @Persistent(defaultFetchGroup = "true")
     @ForeignKey(name = "POLICYVIOLATION_POLICYCONDITION_FK", updateAction = ForeignKeyAction.NONE, deleteAction = ForeignKeyAction.CASCADE, deferred = "true")
@@ -131,7 +136,20 @@ public class PolicyViolation implements Serializable {
 
     public void setComponent(Component component) {
         this.component = component;
-        this.project = component.getProject();
+        if (component != null) {
+            this.project = component.getProject();
+        }
+    }
+
+    public CryptoAsset getCryptoAsset() {
+        return cryptoAsset;
+    }
+
+    public void setCryptoAsset(CryptoAsset cryptoAsset) {
+        this.cryptoAsset = cryptoAsset;
+        if (cryptoAsset != null) {
+            this.project = cryptoAsset.getProject();
+        }
     }
 
     public Project getProject() {

@@ -16,26 +16,25 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) OWASP Foundation. All Rights Reserved.
  */
-package org.dependencytrack.model;
+package org.dependencytrack.event;
+
+import alpine.event.framework.AbstractChainableEvent;
+import alpine.event.framework.Event;
+
+import java.util.UUID;
 
 /**
- * Defines various types of components. Roughly matches the CycloneDX specification.
- *
- * @author Steve Springett
- * @since 3.0.0
+ * Defines an {@link Event} used to trigger crypto asset metrics updates.
  */
-public enum Classifier {
-    APPLICATION,
-    FRAMEWORK,
-    LIBRARY,
-    CONTAINER,
-    CRYPTOGRAPHIC_ASSET,
-    OPERATING_SYSTEM,
-    DEVICE,
-    FIRMWARE,
-    FILE,
-    PLATFORM,
-    DEVICE_DRIVER,
-    MACHINE_LEARNING_MODEL,
-    DATA
+public class CryptoMetricsUpdateEvent extends AbstractChainableEvent {
+
+    private final UUID uuid;
+
+    public CryptoMetricsUpdateEvent(final UUID uuid) {
+        this.uuid = uuid;
+    }
+
+    public UUID getUuid() {
+        return uuid;
+    }
 }

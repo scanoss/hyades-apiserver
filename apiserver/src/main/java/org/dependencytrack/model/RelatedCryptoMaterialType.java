@@ -18,24 +18,22 @@
  */
 package org.dependencytrack.model;
 
-/**
- * Defines various types of components. Roughly matches the CycloneDX specification.
- *
- * @author Steve Springett
- * @since 3.0.0
- */
-public enum Classifier {
-    APPLICATION,
-    FRAMEWORK,
-    LIBRARY,
-    CONTAINER,
-    CRYPTOGRAPHIC_ASSET,
-    OPERATING_SYSTEM,
-    DEVICE,
-    FIRMWARE,
-    FILE,
-    PLATFORM,
-    DEVICE_DRIVER,
-    MACHINE_LEARNING_MODEL,
-    DATA
+public enum RelatedCryptoMaterialType {
+    SECRET_KEY,
+    PUBLIC_KEY,
+    PRIVATE_KEY,
+    CIPHER_TEXT,
+    SIGNATURE,
+    DIGEST,
+    IV,
+    NONCE,
+    SEED,
+    SALT,
+    SHARED_SECRET,
+    TAG,
+    ADDITIONAL_DATA,
+    PASSWORD,
+    CREDENTIAL,
+    TOKEN,
+    OTHER
 }

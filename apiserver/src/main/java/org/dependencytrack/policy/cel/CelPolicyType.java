@@ -32,6 +32,12 @@ public enum CelPolicyType {
             Library.Lib(new CelComponentPolicyLibrary()),
             Library.Lib(new CelCommonPolicyLibrary())
     )),
+    CRYPTO_ASSET(List.of(
+            Library.StdLib(),
+            Library.Lib(new StringsLib()),
+            Library.Lib(new CelCryptoAssetPolicyLibrary()),
+            Library.Lib(new CelCommonPolicyLibrary())
+    )),
     VULNERABILITY(List.of(
             Library.StdLib(),
             Library.Lib(new StringsLib()),

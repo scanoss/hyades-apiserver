@@ -39,6 +39,12 @@
     <class>org.dependencytrack.model.Bom</class>
     <class>org.dependencytrack.model.Component</class>
     <class>org.dependencytrack.model.ComponentOccurrence</class>
+    <class>org.dependencytrack.model.CryptoAsset</class>
+    <class>org.dependencytrack.model.CryptoAssetAlgorithm</class>
+    <class>org.dependencytrack.model.CryptoAssetCertificate</class>
+    <class>org.dependencytrack.model.CryptoAssetProtocol</class>
+    <class>org.dependencytrack.model.CryptoAssetRelatedMaterial</class>
+    <class>org.dependencytrack.model.CryptoAssetAnalysis</class>
     <class>org.dependencytrack.model.ComponentProperty</class>
     <class>org.dependencytrack.model.Epss</class>
     <class>org.dependencytrack.model.FindingAttribution</class>

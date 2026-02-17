@@ -158,3 +158,46 @@ message VersionDistance {
   optional string minor = 3;
   optional string patch = 4;
 }
+
+message CryptoAsset {
+  string uuid = 1;
+  string name = 2;
+  string asset_type = 3;
+  optional string oid = 4;
+  optional string description = 5;
+  optional CryptoAlgorithm algorithm = 10;
+  optional CryptoCertificate certificate = 11;
+  optional CryptoProtocol protocol = 12;
+  optional CryptoRelatedMaterial related_material = 13;
+}
+
+message CryptoAlgorithm {
+  optional string primitive = 1;
+  optional string algorithm_mode = 2;
+  optional string padding = 3;
+  optional string parameter_set_identifier = 4;
+  optional string curve = 5;
+  optional int32 classical_security_level = 6;
+  optional int32 nist_quantum_security_level = 7;
+}
+
+message CryptoCertificate {
+  optional string subject_name = 1;
+  optional string issuer_name = 2;
+  optional google.protobuf.Timestamp not_valid_before = 3;
+  optional google.protobuf.Timestamp not_valid_after = 4;
+  optional string signature_algorithm_ref = 5;
+}
+
+message CryptoProtocol {
+  optional string protocol_type = 1;
+  optional string protocol_version = 2;
+  optional string cipher_suites = 3;
+}
+
+message CryptoRelatedMaterial {
+  optional string type = 1;
+  optional int32 size = 2;
+  optional string format = 3;
+  optional string algorithm_ref = 4;
+}

@@ -50,6 +50,15 @@ import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ComponentIdentity;
 import org.dependencytrack.model.ComponentOccurrence;
 import org.dependencytrack.model.ComponentProperty;
+import org.dependencytrack.model.CryptoAsset;
+import org.dependencytrack.model.CryptoAssetAlgorithm;
+import org.dependencytrack.model.CryptoAssetAnalysis;
+import org.dependencytrack.model.CryptoAssetAnalysisState;
+import org.dependencytrack.model.CryptoAssetCertificate;
+import org.dependencytrack.model.CryptoAssetMetrics;
+import org.dependencytrack.model.CryptoAssetProtocol;
+import org.dependencytrack.model.CryptoAssetRelatedMaterial;
+import org.dependencytrack.model.CryptoAssetType;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.Epss;
 import org.dependencytrack.model.FindingAttribution;
@@ -149,6 +158,7 @@ public class QueryManager extends AlpineQueryManager {
     private TagQueryManager tagQueryManager;
     private EpssQueryManager epssQueryManager;
     private AdvisoryQueryManager advisoryQueryManager;
+    private CryptoAssetQueryManager cryptoAssetQueryManager;
 
     /**
      * Default constructor.
@@ -451,6 +461,13 @@ public class QueryManager extends AlpineQueryManager {
             integrityAnalysisQueryManager = (request == null) ? new IntegrityAnalysisQueryManager(getPersistenceManager()) : new IntegrityAnalysisQueryManager(getPersistenceManager(), request);
         }
         return integrityAnalysisQueryManager;
+    }
+
+    private CryptoAssetQueryManager getCryptoAssetQueryManager() {
+        if (cryptoAssetQueryManager == null) {
+            cryptoAssetQueryManager = (request == null) ? new CryptoAssetQueryManager(getPersistenceManager()) : new CryptoAssetQueryManager(getPersistenceManager(), request);
+        }
+        return cryptoAssetQueryManager;
     }
 
     /**
@@ -1664,6 +1681,83 @@ public class QueryManager extends AlpineQueryManager {
                 """);
         query.setParameters(lockName.hashCode());
         return executeAndCloseResultUnique(query, Boolean.class);
+    }
+
+    // --- CryptoAsset delegation methods ---
+
+    public PaginatedResult getCryptoAssets(final Project project) {
+        return getCryptoAssetQueryManager().getCryptoAssets(project);
+    }
+
+    public PaginatedResult getCryptoAssetsByType(final Project project, final CryptoAssetType type) {
+        return getCryptoAssetQueryManager().getCryptoAssetsByType(project, type);
+    }
+
+    public PaginatedResult getAllCryptoAssets() {
+        return getCryptoAssetQueryManager().getAllCryptoAssets();
+    }
+
+    public PaginatedResult getAllCryptoAssetsByType(final CryptoAssetType type) {
+        return getCryptoAssetQueryManager().getAllCryptoAssetsByType(type);
+    }
+
+    public CryptoAsset getCryptoAssetByUuid(final UUID uuid) {
+        return getCryptoAssetQueryManager().getCryptoAssetByUuid(uuid);
+    }
+
+    public CryptoAsset getCryptoAssetByBomRef(final Project project, final String bomRef) {
+        return getCryptoAssetQueryManager().getCryptoAssetByBomRef(project, bomRef);
+    }
+
+    public CryptoAsset createCryptoAsset(final CryptoAsset cryptoAsset) {
+        return getCryptoAssetQueryManager().createCryptoAsset(cryptoAsset);
+    }
+
+    public CryptoAssetAlgorithm createCryptoAssetAlgorithm(final CryptoAssetAlgorithm algorithm) {
+        return getCryptoAssetQueryManager().createCryptoAssetAlgorithm(algorithm);
+    }
+
+    public CryptoAssetCertificate createCryptoAssetCertificate(final CryptoAssetCertificate certificate) {
+        return getCryptoAssetQueryManager().createCryptoAssetCertificate(certificate);
+    }
+
+    public CryptoAssetProtocol createCryptoAssetProtocol(final CryptoAssetProtocol protocol) {
+        return getCryptoAssetQueryManager().createCryptoAssetProtocol(protocol);
+    }
+
+    public CryptoAssetRelatedMaterial createCryptoAssetRelatedMaterial(final CryptoAssetRelatedMaterial material) {
+        return getCryptoAssetQueryManager().createCryptoAssetRelatedMaterial(material);
+    }
+
+    public void deleteCryptoAsset(final CryptoAsset cryptoAsset) {
+        getCryptoAssetQueryManager().deleteCryptoAsset(cryptoAsset);
+    }
+
+    public void deleteCryptoAssets(final Project project) {
+        getCryptoAssetQueryManager().deleteCryptoAssets(project);
+    }
+
+    public long getCryptoAssetCount(final Project project) {
+        return getCryptoAssetQueryManager().getCryptoAssetCount(project);
+    }
+
+    public CryptoAssetAnalysis getCryptoAssetAnalysis(final Project project, final CryptoAsset cryptoAsset) {
+        return getCryptoAssetQueryManager().getCryptoAssetAnalysis(project, cryptoAsset);
+    }
+
+    public PaginatedResult getCryptoAssetAnalyses(final Project project) {
+        return getCryptoAssetQueryManager().getCryptoAssetAnalyses(project);
+    }
+
+    public CryptoAssetAnalysis createCryptoAssetAnalysis(final Project project, final CryptoAsset cryptoAsset,
+                                                          final CryptoAssetAnalysisState state, final String justification,
+                                                          final String response, final String details,
+                                                          final String comment, final Boolean suppressed) {
+        return getCryptoAssetQueryManager().createCryptoAssetAnalysis(project, cryptoAsset, state, justification, response, details, comment, suppressed);
+    }
+
+    public List<CryptoAsset> getAllCryptoAssetsList(final Project project) {
+        return getCryptoAssetQueryManager().getAllCryptoAssetsList(project);
     }
 
 }

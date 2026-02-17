@@ -33,14 +33,21 @@ import org.datanucleus.flush.FlushMode;
 import org.dependencytrack.event.BomUploadEvent;
 import org.dependencytrack.event.ComponentRepositoryMetaAnalysisEvent;
 import org.dependencytrack.event.ComponentVulnerabilityAnalysisEvent;
+import org.dependencytrack.event.CryptoMetricsUpdateEvent;
 import org.dependencytrack.event.IntegrityAnalysisEvent;
 import org.dependencytrack.event.ProjectMetricsUpdateEvent;
+import org.dependencytrack.event.ProjectPolicyEvaluationEvent;
 import org.dependencytrack.event.kafka.KafkaEventDispatcher;
 import org.dependencytrack.event.kafka.componentmeta.AbstractMetaHandler;
 import org.dependencytrack.filestorage.api.FileStorage;
 import org.dependencytrack.model.Bom;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ComponentIdentity;
+import org.dependencytrack.model.CryptoAsset;
+import org.dependencytrack.model.CryptoAssetAlgorithm;
+import org.dependencytrack.model.CryptoAssetCertificate;
+import org.dependencytrack.model.CryptoAssetProtocol;
+import org.dependencytrack.model.CryptoAssetRelatedMaterial;
 import org.dependencytrack.model.FetchStatus;
 import org.dependencytrack.model.IntegrityMetaComponent;
 import org.dependencytrack.model.License;
@@ -106,6 +113,7 @@ import static org.dependencytrack.notification.api.NotificationFactory.createBom
 import static org.dependencytrack.notification.api.NotificationFactory.createBomProcessedNotification;
 import static org.dependencytrack.notification.api.NotificationFactory.createBomProcessingFailedNotification;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertComponents;
+import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertCryptoAssetsFromJson;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertDependencyGraph;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertServices;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertToProject;
@@ -283,11 +291,14 @@ public class BomUploadProcessingTask implements Subscriber {
             dispatchBomProcessedNotification(ctx);
         }
 
+        // Process crypto assets from the BOM
+        final boolean hasCryptoAssets = processCryptoAssets(cdxBomBytes, processedBom.project());
+
         final List<ComponentVulnerabilityAnalysisEvent> vulnAnalysisEvents = createVulnAnalysisEvents(ctx, processedBom.components());
         final List<ComponentRepositoryMetaAnalysisEvent> repoMetaAnalysisEvents = createRepoMetaAnalysisEvents(processedBom.components());
 
         final var dispatchedEvents = new ArrayList<CompletableFuture<?>>(vulnAnalysisEvents.size() + repoMetaAnalysisEvents.size());
-        dispatchedEvents.addAll(initiateVulnerabilityAnalysis(ctx, vulnAnalysisEvents));
+        dispatchedEvents.addAll(initiateVulnerabilityAnalysis(ctx, vulnAnalysisEvents, hasCryptoAssets));
         dispatchedEvents.addAll(initiateRepoMetaAnalysis(repoMetaAnalysisEvents));
         CompletableFuture.allOf(dispatchedEvents.toArray(new CompletableFuture[0])).join();
     }
@@ -1033,7 +1044,8 @@ public class BomUploadProcessingTask implements Subscriber {
 
     private List<CompletableFuture<?>> initiateVulnerabilityAnalysis(
             final Context ctx,
-            final Collection<ComponentVulnerabilityAnalysisEvent> events
+            final Collection<ComponentVulnerabilityAnalysisEvent> events,
+            final boolean hasCryptoAssets
     ) {
         if (events.isEmpty()) {
             // No components to be sent for vulnerability analysis.
@@ -1049,11 +1061,23 @@ public class BomUploadProcessingTask implements Subscriber {
                     vulnAnalysisWorkflowState.setStatus(WorkflowStatus.NOT_APPLICABLE);
                     vulnAnalysisWorkflowState.setUpdatedAt(new Date());
 
-                    final WorkflowState policyEvalWorkflowState =
-                            qm.getWorkflowStateByTokenAndStep(ctx.token, WorkflowStep.POLICY_EVALUATION);
-                    policyEvalWorkflowState.setStatus(WorkflowStatus.NOT_APPLICABLE);
-                    policyEvalWorkflowState.setUpdatedAt(new Date());
+                    if (!hasCryptoAssets) {
+                        final WorkflowState policyEvalWorkflowState =
+                                qm.getWorkflowStateByTokenAndStep(ctx.token, WorkflowStep.POLICY_EVALUATION);
+                        policyEvalWorkflowState.setStatus(WorkflowStatus.NOT_APPLICABLE);
+                        policyEvalWorkflowState.setUpdatedAt(new Date());
+                    }
                 });
+            }
+
+            if (hasCryptoAssets) {
+                // No regular components, but crypto assets exist.
+                // Trigger policy evaluation directly since the normal trigger chain
+                // (vuln analysis completion -> policy evaluation) won't fire.
+                LOGGER.info("No regular components but crypto assets found; Triggering policy evaluation directly");
+                final var policyEvalEvent = new ProjectPolicyEvaluationEvent(ctx.project.getUuid());
+                policyEvalEvent.setChainIdentifier(ctx.token);
+                Event.dispatch(policyEvalEvent);
             }
 
             // Trigger project metrics update no matter if vuln analysis is applicable or not.
@@ -1134,6 +1158,64 @@ public class BomUploadProcessingTask implements Subscriber {
                         ctx.bomSpecVersion,
                         ctx.token.toString(),
                         throwable.getMessage()));
+    }
+
+    private boolean processCryptoAssets(final byte[] bomBytes, final Project project) {
+        try {
+            final List<CryptoAsset> cryptoAssets = convertCryptoAssetsFromJson(bomBytes, project);
+            if (cryptoAssets.isEmpty()) {
+                LOGGER.debug("No crypto assets found in BOM");
+                return false;
+            }
+            LOGGER.info("Processing %d crypto assets".formatted(cryptoAssets.size()));
+            try (final var qm = new QueryManager()) {
+                qm.getPersistenceManager().setProperty("datanucleus.DetachAllOnCommit", "false");
+                qm.runInTransaction(() -> {
+                    // Re-attach project in this PM context to avoid cascade-persist
+                    final Project managedProject = qm.getObjectById(Project.class, project.getId());
+
+                    // Clean-slate approach: delete existing crypto assets for this project
+                    qm.deleteCryptoAssets(managedProject);
+
+                    for (final CryptoAsset asset : cryptoAssets) {
+                        // Detach sub-entities before persisting parent to avoid cascade with null FK
+                        final CryptoAssetAlgorithm algorithm = asset.getAlgorithm();
+                        final CryptoAssetCertificate certificate = asset.getCertificate();
+                        final CryptoAssetProtocol protocol = asset.getProtocol();
+                        final CryptoAssetRelatedMaterial relatedMaterial = asset.getRelatedMaterial();
+                        asset.setAlgorithm(null);
+                        asset.setCertificate(null);
+                        asset.setProtocol(null);
+                        asset.setRelatedMaterial(null);
+
+                        asset.setProject(managedProject);
+                        final CryptoAsset persistentAsset = qm.createCryptoAsset(asset);
+                        if (algorithm != null) {
+                            algorithm.setCryptoAsset(persistentAsset);
+                            qm.createCryptoAssetAlgorithm(algorithm);
+                        }
+                        if (certificate != null) {
+                            certificate.setCryptoAsset(persistentAsset);
+                            qm.createCryptoAssetCertificate(certificate);
+                        }
+                        if (protocol != null) {
+                            protocol.setCryptoAsset(persistentAsset);
+                            qm.createCryptoAssetProtocol(protocol);
+                        }
+                        if (relatedMaterial != null) {
+                            relatedMaterial.setCryptoAsset(persistentAsset);
+                            qm.createCryptoAssetRelatedMaterial(relatedMaterial);
+                        }
+                    }
+                });
+            }
+            // Trigger crypto metrics update
+            EventService.getInstance().publish(new CryptoMetricsUpdateEvent(project.getUuid()));
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("Failed to process crypto assets", e);
+            return false;
+        }
     }
 
     private static List<ComponentVulnerabilityAnalysisEvent> createVulnAnalysisEvents(

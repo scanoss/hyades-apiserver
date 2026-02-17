@@ -27,6 +27,11 @@ import jakarta.annotation.Nullable;
 import org.dependencytrack.model.RepositoryType;
 import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.proto.policy.v1.Component;
+import org.dependencytrack.proto.policy.v1.CryptoAlgorithm;
+import org.dependencytrack.proto.policy.v1.CryptoAsset;
+import org.dependencytrack.proto.policy.v1.CryptoCertificate;
+import org.dependencytrack.proto.policy.v1.CryptoProtocol;
+import org.dependencytrack.proto.policy.v1.CryptoRelatedMaterial;
 import org.dependencytrack.proto.policy.v1.License;
 import org.dependencytrack.proto.policy.v1.Project;
 import org.dependencytrack.proto.policy.v1.Tools;
@@ -156,6 +161,11 @@ public class CelCommonPolicyLibrary implements Library {
                 ),
                 EnvOption.types(
                         Component.getDefaultInstance(),
+                        CryptoAsset.getDefaultInstance(),
+                        CryptoAlgorithm.getDefaultInstance(),
+                        CryptoCertificate.getDefaultInstance(),
+                        CryptoProtocol.getDefaultInstance(),
+                        CryptoRelatedMaterial.getDefaultInstance(),
                         License.getDefaultInstance(),
                         License.Group.getDefaultInstance(),
                         Project.getDefaultInstance(),
