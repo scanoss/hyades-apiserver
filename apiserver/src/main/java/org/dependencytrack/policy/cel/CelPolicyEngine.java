@@ -47,6 +47,11 @@ import org.dependencytrack.policy.cel.compat.ComponentAgeCelPolicyScriptSourceBu
 import org.dependencytrack.policy.cel.compat.ComponentHashCelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.compat.CoordinatesCelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.compat.CpeCelPolicyScriptSourceBuilder;
+import org.dependencytrack.policy.cel.compat.CryptoAlgorithmCelPolicyScriptSourceBuilder;
+import org.dependencytrack.policy.cel.compat.CryptoCertificateCelPolicyScriptSourceBuilder;
+import org.dependencytrack.policy.cel.compat.CryptoMaterialCelPolicyScriptSourceBuilder;
+import org.dependencytrack.policy.cel.compat.CryptoProtocolCelPolicyScriptSourceBuilder;
+import org.dependencytrack.policy.cel.compat.CryptoQuantumCelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.compat.CweCelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.compat.EpssCelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.compat.LicenseCelPolicyScriptSourceBuilder;
@@ -58,9 +63,15 @@ import org.dependencytrack.policy.cel.compat.VersionCelPolicyScriptSourceBuilder
 import org.dependencytrack.policy.cel.compat.VersionDistanceCelScriptBuilder;
 import org.dependencytrack.policy.cel.compat.VulnerabilityIdCelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.mapping.ComponentProjection;
+import org.dependencytrack.policy.cel.mapping.CryptoAssetProjection;
 import org.dependencytrack.policy.cel.mapping.LicenseProjection;
 import org.dependencytrack.policy.cel.mapping.VulnerabilityProjection;
 import org.dependencytrack.policy.cel.persistence.CelPolicyDao;
+import org.dependencytrack.proto.policy.v1.CryptoAlgorithm;
+import org.dependencytrack.proto.policy.v1.CryptoAsset;
+import org.dependencytrack.proto.policy.v1.CryptoCertificate;
+import org.dependencytrack.proto.policy.v1.CryptoProtocol;
+import org.dependencytrack.proto.policy.v1.CryptoRelatedMaterial;
 import org.dependencytrack.proto.policy.v1.Vulnerability;
 import org.dependencytrack.util.NotificationUtil;
 import org.dependencytrack.util.VulnerabilityUtil;
@@ -79,6 +90,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -104,6 +116,17 @@ public class CelPolicyEngine {
     private static final Logger LOGGER = Logger.getLogger(CelPolicyEngine.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Map<Subject, CelPolicyScriptSourceBuilder> SCRIPT_BUILDERS;
+    private static final Set<Subject> CRYPTO_SUBJECTS = Set.of(
+            Subject.CRYPTO_ALGORITHM_NAME,
+            Subject.CRYPTO_ALGORITHM_PRIMITIVE,
+            Subject.CRYPTO_ALGORITHM_PARAMETER_SET,
+            Subject.CRYPTO_QUANTUM_SECURITY,
+            Subject.CRYPTO_CLASSICAL_STRENGTH,
+            Subject.CRYPTO_PROTOCOL_VERSION,
+            Subject.CRYPTO_CERTIFICATE_EXPIRY,
+            Subject.CRYPTO_CERTIFICATE_ALGORITHM,
+            Subject.CRYPTO_MATERIAL_TYPE
+    );
 
     static {
         SCRIPT_BUILDERS = new HashMap<>();
@@ -122,16 +145,32 @@ public class CelPolicyEngine {
         SCRIPT_BUILDERS.put(Subject.AGE, new ComponentAgeCelPolicyScriptSourceBuilder());
         SCRIPT_BUILDERS.put(Subject.VERSION_DISTANCE, new VersionDistanceCelScriptBuilder());
         SCRIPT_BUILDERS.put(Subject.EPSS, new EpssCelPolicyScriptSourceBuilder());
+        // Crypto policy builders
+        final var cryptoAlgorithmBuilder = new CryptoAlgorithmCelPolicyScriptSourceBuilder();
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_ALGORITHM_NAME, cryptoAlgorithmBuilder);
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_ALGORITHM_PRIMITIVE, cryptoAlgorithmBuilder);
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_ALGORITHM_PARAMETER_SET, cryptoAlgorithmBuilder);
+        final var cryptoQuantumBuilder = new CryptoQuantumCelPolicyScriptSourceBuilder();
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_QUANTUM_SECURITY, cryptoQuantumBuilder);
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_CLASSICAL_STRENGTH, cryptoQuantumBuilder);
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_PROTOCOL_VERSION, new CryptoProtocolCelPolicyScriptSourceBuilder());
+        final var cryptoCertBuilder = new CryptoCertificateCelPolicyScriptSourceBuilder();
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_CERTIFICATE_EXPIRY, cryptoCertBuilder);
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_CERTIFICATE_ALGORITHM, cryptoCertBuilder);
+        SCRIPT_BUILDERS.put(Subject.CRYPTO_MATERIAL_TYPE, new CryptoMaterialCelPolicyScriptSourceBuilder());
     }
 
-    private final CelPolicyScriptHost scriptHost;
+    private final CelPolicyScriptHost componentScriptHost;
+    private final CelPolicyScriptHost cryptoScriptHost;
 
     public CelPolicyEngine() {
-        this(CelPolicyScriptHost.getInstance(CelPolicyType.COMPONENT));
+        this(CelPolicyScriptHost.getInstance(CelPolicyType.COMPONENT),
+             CelPolicyScriptHost.getInstance(CelPolicyType.CRYPTO_ASSET));
     }
 
-    CelPolicyEngine(final CelPolicyScriptHost scriptHost) {
-        this.scriptHost = scriptHost;
+    CelPolicyEngine(final CelPolicyScriptHost componentScriptHost, final CelPolicyScriptHost cryptoScriptHost) {
+        this.componentScriptHost = componentScriptHost;
+        this.cryptoScriptHost = cryptoScriptHost;
     }
 
     /**
@@ -155,87 +194,148 @@ public class CelPolicyEngine {
                 return;
             }
 
-            LOGGER.debug("Compiling policy scripts");
-            final List<Pair<PolicyCondition, CelPolicyScript>> conditionScriptPairs = getApplicableConditionScriptPairs(celQm, project);
-            if (conditionScriptPairs.isEmpty()) {
+            LOGGER.info("Compiling policy scripts");
+            final List<Pair<PolicyCondition, String>> allConditionScriptSrcPairs = getApplicableConditionScriptSrcPairs(celQm, project);
+            if (allConditionScriptSrcPairs.isEmpty()) {
                 LOGGER.info("No applicable policies found");
                 celQm.reconcileViolations(project.getId(), emptyMultiValuedMap());
+                celQm.reconcileCryptoViolations(project.getId(), emptyMultiValuedMap());
                 return;
             }
 
-            final MultiValuedMap<Type, String> requirements = determineScriptRequirements(conditionScriptPairs);
-            LOGGER.debug("Requirements for %d policy conditions: %s".formatted(conditionScriptPairs.size(), requirements));
-
-            final org.dependencytrack.proto.policy.v1.Project protoProject;
-            if (requirements.containsKey(TYPE_PROJECT)) {
-                final var inputProject = org.dependencytrack.proto.policy.v1.Project.newBuilder().setUuid(project.getUuid().toString()).build();
-                protoProject = withJdbiHandle(handle -> handle.attach(CelPolicyDao.class).loadRequiredFields(inputProject, requirements));
-            } else {
-                protoProject = org.dependencytrack.proto.policy.v1.Project.getDefaultInstance();
+            // Split conditions into component conditions and crypto conditions.
+            final var componentConditionSrcPairs = new ArrayList<Pair<PolicyCondition, String>>();
+            final var cryptoConditionSrcPairs = new ArrayList<Pair<PolicyCondition, String>>();
+            for (final Pair<PolicyCondition, String> pair : allConditionScriptSrcPairs) {
+                if (CRYPTO_SUBJECTS.contains(pair.getLeft().getSubject())) {
+                    cryptoConditionSrcPairs.add(pair);
+                } else {
+                    componentConditionSrcPairs.add(pair);
+                }
             }
-            // Preload components for the entire project, to avoid excessive queries.
-            final List<ComponentProjection> components = celQm.fetchAllComponents(project.getId(), requirements.get(TYPE_COMPONENT));
+            LOGGER.info("Found %d component conditions and %d crypto conditions"
+                    .formatted(componentConditionSrcPairs.size(), cryptoConditionSrcPairs.size()));
 
-            // Preload licenses for the entire project, as chances are high that they will be used by multiple components.
-            final Map<Long, org.dependencytrack.proto.policy.v1.License> licenseById;
-            if (requirements.containsKey(TYPE_LICENSE) || (requirements.containsKey(TYPE_COMPONENT) && requirements.get(TYPE_COMPONENT).contains("resolved_license"))) {
-                licenseById = celQm.fetchAllLicenses(project.getId(), requirements.get(TYPE_LICENSE), requirements.get(TYPE_LICENSE_GROUP)).stream()
-                        .collect(Collectors.toMap(
-                                projection -> projection.id,
-                                CelPolicyEngine::mapToProto
-                        ));
-            } else {
-                licenseById = Collections.emptyMap();
-            }
+            // Compile component conditions with the component script host.
+            final List<Pair<PolicyCondition, CelPolicyScript>> componentConditionScriptPairs = componentConditionSrcPairs.stream()
+                    .map(pair -> compileConditionScript(pair, componentScriptHost))
+                    .filter(Objects::nonNull)
+                    .toList();
 
-            // Preload vulnerabilities for the entire project, as chances are high that they will be used by multiple components.
-            final Map<Long, org.dependencytrack.proto.policy.v1.Vulnerability> protoVulnById;
-            final Map<Long, List<Long>> vulnIdsByComponentId;
-            if (requirements.containsKey(TYPE_VULNERABILITY)) {
-                protoVulnById = celQm.fetchAllVulnerabilities(project.getId(), requirements.get(TYPE_VULNERABILITY)).stream()
-                        .collect(Collectors.toMap(
-                                projection -> projection.id,
-                                CelPolicyEngine::mapToProto
-                        ));
+            // Compile crypto conditions with the crypto script host.
+            final List<Pair<PolicyCondition, CelPolicyScript>> cryptoConditionScriptPairs = cryptoConditionSrcPairs.stream()
+                    .map(pair -> compileConditionScript(pair, cryptoScriptHost))
+                    .filter(Objects::nonNull)
+                    .toList();
 
-                vulnIdsByComponentId = celQm.fetchAllComponentsVulnerabilities(project.getId()).stream()
-                        .collect(Collectors.groupingBy(
-                                projection -> projection.componentId,
-                                Collectors.mapping(projection -> projection.vulnerabilityId, Collectors.toList())
-                        ));
-            } else {
-                protoVulnById = Collections.emptyMap();
-                vulnIdsByComponentId = Collections.emptyMap();
-            }
-
-            // Evaluate all policy conditions against all components.
-            final var conditionsViolated = new HashSetValuedHashMap<Long, PolicyCondition>();
             final Timestamp protoNow = Timestamps.now(); // Use consistent now timestamp for all evaluations.
-            for (final ComponentProjection component : components) {
-                final org.dependencytrack.proto.policy.v1.Component protoComponent = mapToProto(component, licenseById);
-                final List<org.dependencytrack.proto.policy.v1.Vulnerability> protoVulns =
-                        vulnIdsByComponentId.getOrDefault(component.id, emptyList()).stream()
-                                .map(protoVulnById::get)
-                                .toList();
 
-                conditionsViolated.putAll(component.id, evaluateConditions(conditionScriptPairs, Map.of(
-                        CelPolicyVariable.COMPONENT.variableName(), protoComponent,
-                        CelPolicyVariable.PROJECT.variableName(), protoProject,
-                        CelPolicyVariable.VULNS.variableName(), protoVulns,
-                        CelPolicyVariable.NOW.variableName(), protoNow
-                )));
+            // --- Component evaluation (existing logic) ---
+            if (!componentConditionScriptPairs.isEmpty()) {
+                final MultiValuedMap<Type, String> requirements = determineScriptRequirements(componentConditionScriptPairs);
+                LOGGER.debug("Requirements for %d component policy conditions: %s".formatted(componentConditionScriptPairs.size(), requirements));
+
+                final org.dependencytrack.proto.policy.v1.Project protoProject;
+                if (requirements.containsKey(TYPE_PROJECT)) {
+                    final var inputProject = org.dependencytrack.proto.policy.v1.Project.newBuilder().setUuid(project.getUuid().toString()).build();
+                    protoProject = withJdbiHandle(handle -> handle.attach(CelPolicyDao.class).loadRequiredFields(inputProject, requirements));
+                } else {
+                    protoProject = org.dependencytrack.proto.policy.v1.Project.getDefaultInstance();
+                }
+                final List<ComponentProjection> components = celQm.fetchAllComponents(project.getId(), requirements.get(TYPE_COMPONENT));
+
+                final Map<Long, org.dependencytrack.proto.policy.v1.License> licenseById;
+                if (requirements.containsKey(TYPE_LICENSE) || (requirements.containsKey(TYPE_COMPONENT) && requirements.get(TYPE_COMPONENT).contains("resolved_license"))) {
+                    licenseById = celQm.fetchAllLicenses(project.getId(), requirements.get(TYPE_LICENSE), requirements.get(TYPE_LICENSE_GROUP)).stream()
+                            .collect(Collectors.toMap(
+                                    projection -> projection.id,
+                                    CelPolicyEngine::mapToProto
+                            ));
+                } else {
+                    licenseById = Collections.emptyMap();
+                }
+
+                final Map<Long, org.dependencytrack.proto.policy.v1.Vulnerability> protoVulnById;
+                final Map<Long, List<Long>> vulnIdsByComponentId;
+                if (requirements.containsKey(TYPE_VULNERABILITY)) {
+                    protoVulnById = celQm.fetchAllVulnerabilities(project.getId(), requirements.get(TYPE_VULNERABILITY)).stream()
+                            .collect(Collectors.toMap(
+                                    projection -> projection.id,
+                                    CelPolicyEngine::mapToProto
+                            ));
+                    vulnIdsByComponentId = celQm.fetchAllComponentsVulnerabilities(project.getId()).stream()
+                            .collect(Collectors.groupingBy(
+                                    projection -> projection.componentId,
+                                    Collectors.mapping(projection -> projection.vulnerabilityId, Collectors.toList())
+                            ));
+                } else {
+                    protoVulnById = Collections.emptyMap();
+                    vulnIdsByComponentId = Collections.emptyMap();
+                }
+
+                final var conditionsViolated = new HashSetValuedHashMap<Long, PolicyCondition>();
+                for (final ComponentProjection component : components) {
+                    final org.dependencytrack.proto.policy.v1.Component protoComponent = mapToProto(component, licenseById);
+                    final List<org.dependencytrack.proto.policy.v1.Vulnerability> protoVulns =
+                            vulnIdsByComponentId.getOrDefault(component.id, emptyList()).stream()
+                                    .map(protoVulnById::get)
+                                    .toList();
+
+                    conditionsViolated.putAll(component.id, evaluateConditions(componentConditionScriptPairs, Map.of(
+                            CelPolicyVariable.COMPONENT.variableName(), protoComponent,
+                            CelPolicyVariable.PROJECT.variableName(), protoProject,
+                            CelPolicyVariable.VULNS.variableName(), protoVulns,
+                            CelPolicyVariable.NOW.variableName(), protoNow
+                    )));
+                }
+
+                final var violationsByComponentId = new ArrayListValuedHashMap<Long, PolicyViolation>();
+                for (final long componentId : conditionsViolated.keySet()) {
+                    violationsByComponentId.putAll(componentId, evaluatePolicyOperators(conditionsViolated.get(componentId)));
+                }
+
+                final List<Long> newComponentViolationIds = celQm.reconcileViolations(project.getId(), violationsByComponentId);
+                LOGGER.info("Identified %d new component violations".formatted(newComponentViolationIds.size()));
+                for (final Long newViolationId : newComponentViolationIds) {
+                    NotificationUtil.analyzeNotificationCriteria(qm, newViolationId);
+                }
+            } else {
+                celQm.reconcileViolations(project.getId(), emptyMultiValuedMap());
             }
 
-            final var violationsByComponentId = new ArrayListValuedHashMap<Long, PolicyViolation>();
-            for (final long componentId : conditionsViolated.keySet()) {
-                violationsByComponentId.putAll(componentId, evaluatePolicyOperators(conditionsViolated.get(componentId)));
-            }
+            // --- Crypto asset evaluation ---
+            if (!cryptoConditionScriptPairs.isEmpty()) {
+                final List<CryptoAssetProjection> cryptoAssets = celQm.fetchAllCryptoAssets(project.getId());
+                LOGGER.debug("Evaluating %d crypto conditions against %d crypto assets"
+                        .formatted(cryptoConditionScriptPairs.size(), cryptoAssets.size()));
 
-            final List<Long> newViolationIds = celQm.reconcileViolations(project.getId(), violationsByComponentId);
-            LOGGER.info("Identified %d new violations".formatted(newViolationIds.size()));
+                final org.dependencytrack.proto.policy.v1.Project protoProjectForCrypto =
+                        org.dependencytrack.proto.policy.v1.Project.getDefaultInstance();
 
-            for (final Long newViolationId : newViolationIds) {
-                NotificationUtil.analyzeNotificationCriteria(qm, newViolationId);
+                final var cryptoConditionsViolated = new HashSetValuedHashMap<Long, PolicyCondition>();
+                for (final CryptoAssetProjection cryptoAsset : cryptoAssets) {
+                    final CryptoAsset protoCryptoAsset = mapToProto(cryptoAsset);
+
+                    cryptoConditionsViolated.putAll(cryptoAsset.id, evaluateConditions(cryptoConditionScriptPairs, Map.of(
+                            CelPolicyVariable.CRYPTO_ASSET.variableName(), protoCryptoAsset,
+                            CelPolicyVariable.PROJECT.variableName(), protoProjectForCrypto,
+                            CelPolicyVariable.NOW.variableName(), protoNow
+                    )));
+                }
+
+                final var cryptoViolationsByCryptoAssetId = new ArrayListValuedHashMap<Long, PolicyViolation>();
+                for (final long cryptoAssetId : cryptoConditionsViolated.keySet()) {
+                    cryptoViolationsByCryptoAssetId.putAll(cryptoAssetId,
+                            evaluateCryptoPolicyOperators(cryptoConditionsViolated.get(cryptoAssetId)));
+                }
+
+                final List<Long> newCryptoViolationIds = celQm.reconcileCryptoViolations(project.getId(), cryptoViolationsByCryptoAssetId);
+                LOGGER.info("Identified %d new crypto violations".formatted(newCryptoViolationIds.size()));
+                for (final Long newViolationId : newCryptoViolationIds) {
+                    NotificationUtil.analyzeNotificationCriteria(qm, newViolationId);
+                }
+            } else {
+                celQm.reconcileCryptoViolations(project.getId(), emptyMultiValuedMap());
             }
         } finally {
             LOGGER.info("Evaluation completed in %s"
@@ -265,16 +365,13 @@ public class CelPolicyEngine {
 
 
     /**
-     * Pre-compile the CEL scripts for all conditions of all applicable policies.
-     * Compiled scripts are cached in-memory by CelPolicyScriptHost, so if the same script
-     * is encountered for multiple components (possibly concurrently), the compilation is
-     * a one-time effort.
+     * Build CEL script sources for all conditions of all applicable policies.
      *
      * @param celQm   The {@link CelPolicyQueryManager} instance to use
      * @param project The {@link Project} to get applicable conditions for
-     * @return {@link Pair}s of {@link PolicyCondition}s and {@link CelPolicyScript}s
+     * @return {@link Pair}s of {@link PolicyCondition}s and their CEL script sources
      */
-    private List<Pair<PolicyCondition, CelPolicyScript>> getApplicableConditionScriptPairs(final CelPolicyQueryManager celQm, final Project project) {
+    private List<Pair<PolicyCondition, String>> getApplicableConditionScriptSrcPairs(final CelPolicyQueryManager celQm, final Project project) {
         final List<Policy> policies = celQm.getApplicablePolicies(project);
         if (policies.isEmpty()) {
             return emptyList();
@@ -284,8 +381,6 @@ public class CelPolicyEngine {
                 .map(Policy::getPolicyConditions)
                 .flatMap(Collection::stream)
                 .map(this::buildConditionScriptSrc)
-                .filter(Objects::nonNull)
-                .map(this::compileConditionScript)
                 .filter(Objects::nonNull)
                 .toList();
     }
@@ -331,7 +426,8 @@ public class CelPolicyEngine {
         return Pair.of(policyCondition, scriptSrc);
     }
 
-    private Pair<PolicyCondition, CelPolicyScript> compileConditionScript(final Pair<PolicyCondition, String> conditionScriptSrcPair) {
+    private static Pair<PolicyCondition, CelPolicyScript> compileConditionScript(final Pair<PolicyCondition, String> conditionScriptSrcPair,
+                                                                                   final CelPolicyScriptHost scriptHost) {
         final CelPolicyScript script;
         try {
             script = scriptHost.compile(conditionScriptSrcPair.getRight(), CacheMode.CACHE);
@@ -534,6 +630,103 @@ public class CelPolicyEngine {
                         .setSource(aliasEntry.getKey().name())
                         .setId(aliasEntry.getValue())
                         .build());
+    }
+
+    /**
+     * Evaluate policy operators for crypto conditions specifically.
+     * <p>
+     * For policies with ALL operator that have both component and crypto conditions,
+     * only crypto conditions are counted for the ALL requirement on the crypto side.
+     * For ANY operator, any single crypto condition match suffices.
+     */
+    private static List<PolicyViolation> evaluateCryptoPolicyOperators(final Collection<PolicyCondition> conditionsViolated) {
+        final Map<Policy, List<PolicyCondition>> violatedConditionsByPolicy = conditionsViolated.stream()
+                .collect(Collectors.groupingBy(PolicyCondition::getPolicy));
+
+        return violatedConditionsByPolicy.entrySet().stream()
+                .flatMap(policyAndViolatedConditions -> {
+                    final Policy policy = policyAndViolatedConditions.getKey();
+                    final List<PolicyCondition> violatedConditions = policyAndViolatedConditions.getValue();
+
+                    // Count only crypto conditions in this policy for ALL operator evaluation.
+                    final long cryptoConditionCount = policy.getPolicyConditions().stream()
+                            .filter(c -> CRYPTO_SUBJECTS.contains(c.getSubject()))
+                            .count();
+
+                    if ((policy.getOperator() == Policy.Operator.ANY && !violatedConditions.isEmpty())
+                            || (policy.getOperator() == Policy.Operator.ALL && violatedConditions.size() == cryptoConditionCount)) {
+                        return violatedConditions.stream()
+                                .map(condition -> {
+                                    final var violation = new PolicyViolation();
+                                    violation.setType(condition.getViolationType());
+                                    violation.setPolicyCondition(condition);
+                                    violation.setTimestamp(new Date());
+                                    return violation;
+                                });
+                    }
+
+                    return Stream.empty();
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    static CryptoAsset mapToProto(final CryptoAssetProjection projection) {
+        final CryptoAsset.Builder builder = CryptoAsset.newBuilder()
+                .setUuid(trimToEmpty(projection.uuid))
+                .setName(trimToEmpty(projection.name))
+                .setAssetType(trimToEmpty(projection.assetType));
+        Optional.ofNullable(projection.oid).ifPresent(builder::setOid);
+        Optional.ofNullable(projection.description).ifPresent(builder::setDescription);
+
+        // Algorithm sub-entity
+        if (projection.algPrimitive != null || projection.algMode != null || projection.algPadding != null
+                || projection.algParameterSetIdentifier != null || projection.algCurve != null
+                || projection.algClassicalSecurityLevel != null || projection.algNistQuantumSecurityLevel != null) {
+            final CryptoAlgorithm.Builder algBuilder = CryptoAlgorithm.newBuilder();
+            Optional.ofNullable(projection.algPrimitive).ifPresent(algBuilder::setPrimitive);
+            Optional.ofNullable(projection.algMode).ifPresent(algBuilder::setAlgorithmMode);
+            Optional.ofNullable(projection.algPadding).ifPresent(algBuilder::setPadding);
+            Optional.ofNullable(projection.algParameterSetIdentifier).ifPresent(algBuilder::setParameterSetIdentifier);
+            Optional.ofNullable(projection.algCurve).ifPresent(algBuilder::setCurve);
+            Optional.ofNullable(projection.algClassicalSecurityLevel).ifPresent(algBuilder::setClassicalSecurityLevel);
+            Optional.ofNullable(projection.algNistQuantumSecurityLevel).ifPresent(algBuilder::setNistQuantumSecurityLevel);
+            builder.setAlgorithm(algBuilder);
+        }
+
+        // Certificate sub-entity
+        if (projection.certSubjectName != null || projection.certIssuerName != null
+                || projection.certNotValidBefore != null || projection.certNotValidAfter != null
+                || projection.certSignatureAlgorithmRef != null) {
+            final CryptoCertificate.Builder certBuilder = CryptoCertificate.newBuilder();
+            Optional.ofNullable(projection.certSubjectName).ifPresent(certBuilder::setSubjectName);
+            Optional.ofNullable(projection.certIssuerName).ifPresent(certBuilder::setIssuerName);
+            Optional.ofNullable(projection.certNotValidBefore).map(Timestamps::fromDate).ifPresent(certBuilder::setNotValidBefore);
+            Optional.ofNullable(projection.certNotValidAfter).map(Timestamps::fromDate).ifPresent(certBuilder::setNotValidAfter);
+            Optional.ofNullable(projection.certSignatureAlgorithmRef).ifPresent(certBuilder::setSignatureAlgorithmRef);
+            builder.setCertificate(certBuilder);
+        }
+
+        // Protocol sub-entity
+        if (projection.protoType != null || projection.protoVersion != null || projection.protoCipherSuites != null) {
+            final CryptoProtocol.Builder protoBuilder = CryptoProtocol.newBuilder();
+            Optional.ofNullable(projection.protoType).ifPresent(protoBuilder::setProtocolType);
+            Optional.ofNullable(projection.protoVersion).ifPresent(protoBuilder::setProtocolVersion);
+            Optional.ofNullable(projection.protoCipherSuites).ifPresent(protoBuilder::setCipherSuites);
+            builder.setProtocol(protoBuilder);
+        }
+
+        // Related material sub-entity
+        if (projection.rmType != null || projection.rmSize != null || projection.rmFormat != null || projection.rmAlgorithmRef != null) {
+            final CryptoRelatedMaterial.Builder rmBuilder = CryptoRelatedMaterial.newBuilder();
+            Optional.ofNullable(projection.rmType).ifPresent(rmBuilder::setType);
+            Optional.ofNullable(projection.rmSize).ifPresent(rmBuilder::setSize);
+            Optional.ofNullable(projection.rmFormat).ifPresent(rmBuilder::setFormat);
+            Optional.ofNullable(projection.rmAlgorithmRef).ifPresent(rmBuilder::setAlgorithmRef);
+            builder.setRelatedMaterial(rmBuilder);
+        }
+
+        return builder.build();
     }
 
 }

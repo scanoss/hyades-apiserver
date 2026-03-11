@@ -26,6 +26,7 @@ import org.projectnessie.cel.checker.Decls;
 enum CelPolicyVariable {
 
     COMPONENT("component", CelPolicyTypes.TYPE_COMPONENT),
+    CRYPTO_ASSET("crypto_asset", CelPolicyTypes.TYPE_CRYPTO_ASSET),
     PROJECT("project", CelPolicyTypes.TYPE_PROJECT),
     VULN("vuln", CelPolicyTypes.TYPE_VULNERABILITY),
     VULNS("vulns", CelPolicyTypes.TYPE_VULNERABILITIES),

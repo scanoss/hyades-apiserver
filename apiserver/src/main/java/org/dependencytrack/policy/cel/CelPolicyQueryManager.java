@@ -29,6 +29,7 @@ import org.dependencytrack.model.Tag;
 import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.policy.cel.mapping.ComponentProjection;
 import org.dependencytrack.policy.cel.mapping.ComponentsVulnerabilitiesProjection;
+import org.dependencytrack.policy.cel.mapping.CryptoAssetProjection;
 import org.dependencytrack.policy.cel.mapping.LicenseGroupProjection;
 import org.dependencytrack.policy.cel.mapping.LicenseProjection;
 import org.dependencytrack.policy.cel.mapping.PolicyViolationProjection;
@@ -303,6 +304,219 @@ class CelPolicyQueryManager implements AutoCloseable {
         }
     }
 
+    List<CryptoAssetProjection> fetchAllCryptoAssets(final long projectId) {
+        final Query<?> query = pm.newQuery(Query.SQL, """
+                SELECT
+                  "CA"."ID"                          AS "id",
+                  CAST("CA"."UUID" AS TEXT)           AS "uuid",
+                  "CA"."NAME"                        AS "name",
+                  "CA"."ASSET_TYPE"                  AS "assetType",
+                  "CA"."OID"                         AS "oid",
+                  "CA"."DESCRIPTION"                 AS "description",
+                  "ALG"."PRIMITIVE"                  AS "algPrimitive",
+                  "ALG"."ALGORITHM_MODE"             AS "algMode",
+                  "ALG"."PADDING"                    AS "algPadding",
+                  "ALG"."PARAMETER_SET_IDENTIFIER"   AS "algParameterSetIdentifier",
+                  "ALG"."CURVE"                      AS "algCurve",
+                  "ALG"."CLASSICAL_SECURITY_LEVEL"   AS "algClassicalSecurityLevel",
+                  "ALG"."NIST_QUANTUM_SECURITY_LEVEL" AS "algNistQuantumSecurityLevel",
+                  "CERT"."SUBJECT_NAME"              AS "certSubjectName",
+                  "CERT"."ISSUER_NAME"               AS "certIssuerName",
+                  "CERT"."NOT_VALID_BEFORE"          AS "certNotValidBefore",
+                  "CERT"."NOT_VALID_AFTER"           AS "certNotValidAfter",
+                  "CERT"."SIGNATURE_ALGORITHM_REF"   AS "certSignatureAlgorithmRef",
+                  "PROTO"."PROTOCOL_TYPE"            AS "protoType",
+                  "PROTO"."PROTOCOL_VERSION"         AS "protoVersion",
+                  "PROTO"."CIPHER_SUITES"            AS "protoCipherSuites",
+                  "RM"."MATERIAL_TYPE"               AS "rmType",
+                  "RM"."MATERIAL_SIZE"               AS "rmSize",
+                  "RM"."MATERIAL_FORMAT"             AS "rmFormat",
+                  "RM"."ALGORITHM_REF"               AS "rmAlgorithmRef"
+                FROM
+                  "CRYPTOASSET" AS "CA"
+                LEFT JOIN
+                  "CRYPTOASSET_ALGORITHM" AS "ALG" ON "ALG"."CRYPTOASSET_ID" = "CA"."ID"
+                LEFT JOIN
+                  "CRYPTOASSET_CERTIFICATE" AS "CERT" ON "CERT"."CRYPTOASSET_ID" = "CA"."ID"
+                LEFT JOIN
+                  "CRYPTOASSET_PROTOCOL" AS "PROTO" ON "PROTO"."CRYPTOASSET_ID" = "CA"."ID"
+                LEFT JOIN
+                  "CRYPTOASSET_RELATED_MATERIAL" AS "RM" ON "RM"."CRYPTOASSET_ID" = "CA"."ID"
+                WHERE
+                  "CA"."PROJECT_ID" = ?
+                """);
+        query.setParameters(projectId);
+        try {
+            return List.copyOf(query.executeResultList(CryptoAssetProjection.class));
+        } finally {
+            query.closeAll();
+        }
+    }
+
+    List<Long> reconcileCryptoViolations(final long projectId, final MultiValuedMap<Long, PolicyViolation> reportedViolationsByCryptoAssetId) {
+        final var newViolationIds = new ArrayList<Long>();
+
+        final JDOConnection jdoConnection = pm.getDataStoreConnection();
+        final var nativeConnection = (Connection) jdoConnection.getNativeConnection();
+        Boolean originalAutoCommit = null;
+        Integer originalTrxIsolation = null;
+
+        try {
+            originalAutoCommit = nativeConnection.getAutoCommit();
+            originalTrxIsolation = nativeConnection.getTransactionIsolation();
+            nativeConnection.setAutoCommit(false);
+            nativeConnection.setTransactionIsolation(TRANSACTION_READ_COMMITTED);
+
+            // Query existing crypto policy violations for this project (those with CRYPTOASSET_ID set).
+            final var existingViolationsByCryptoAssetId = new HashSetValuedHashMap<Long, PolicyViolationProjection>();
+            try (final PreparedStatement ps = nativeConnection.prepareStatement("""
+                    SELECT
+                      "ID"                 AS "id",
+                      "CRYPTOASSET_ID"     AS "cryptoAssetId",
+                      "POLICYCONDITION_ID" AS "policyConditionId"
+                    FROM
+                      "POLICYVIOLATION"
+                    WHERE
+                      "PROJECT_ID" = ?
+                      AND "CRYPTOASSET_ID" IS NOT NULL
+                    """)) {
+                ps.setLong(1, projectId);
+
+                final ResultSet rs = ps.executeQuery();
+                while (rs.next()) {
+                    existingViolationsByCryptoAssetId.put(
+                            rs.getLong("cryptoAssetId"),
+                            new PolicyViolationProjection(
+                                    rs.getLong("id"),
+                                    rs.getLong("policyConditionId")
+                            ));
+                }
+            }
+
+            final Set<Long> cryptoAssetIds = new HashSet<>(reportedViolationsByCryptoAssetId.keySet().size() + existingViolationsByCryptoAssetId.keySet().size());
+            cryptoAssetIds.addAll(reportedViolationsByCryptoAssetId.keySet());
+            cryptoAssetIds.addAll(existingViolationsByCryptoAssetId.keySet());
+
+            final var violationIdsToDelete = new ArrayList<Long>();
+            final var violationsToCreate = new HashSetValuedHashMap<Long, PolicyViolation>();
+            for (final Long cryptoAssetId : cryptoAssetIds) {
+                final Collection<PolicyViolationProjection> existingViolations = existingViolationsByCryptoAssetId.get(cryptoAssetId);
+                final Collection<PolicyViolation> reportedViolations = reportedViolationsByCryptoAssetId.get(cryptoAssetId);
+
+                if (reportedViolations == null || reportedViolations.isEmpty()) {
+                    violationIdsToDelete.addAll(existingViolations.stream().map(PolicyViolationProjection::id).toList());
+                    continue;
+                }
+
+                if (existingViolations == null || existingViolations.isEmpty()) {
+                    violationsToCreate.putAll(cryptoAssetId, reportedViolations);
+                    continue;
+                }
+
+                existingViolations.stream()
+                        .filter(existingViolation -> reportedViolations.stream().noneMatch(newViolation ->
+                                newViolation.getPolicyCondition().getId() == existingViolation.policyConditionId()))
+                        .map(PolicyViolationProjection::id)
+                        .forEach(violationIdsToDelete::add);
+
+                reportedViolations.stream()
+                        .filter(reportedViolation -> existingViolations.stream().noneMatch(existingViolation ->
+                                existingViolation.policyConditionId() == reportedViolation.getPolicyCondition().getId()))
+                        .forEach(reportedViolation -> violationsToCreate.put(cryptoAssetId, reportedViolation));
+            }
+
+            if (!violationsToCreate.isEmpty()) {
+                // Insert with COMPONENT_ID = NULL, CRYPTOASSET_ID = cryptoAssetId
+                try (final PreparedStatement ps = nativeConnection.prepareStatement("""
+                        INSERT INTO "POLICYVIOLATION"
+                          ("UUID", "TIMESTAMP", "CRYPTOASSET_ID", "PROJECT_ID", "POLICYCONDITION_ID", "TYPE")
+                        VALUES
+                          (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                        RETURNING "ID"
+                        """, Statement.RETURN_GENERATED_KEYS)) {
+                    for (final Map.Entry<Long, PolicyViolation> entry : violationsToCreate.entries()) {
+                        ps.setObject(1, UUID.randomUUID());
+                        ps.setTimestamp(2, new Timestamp(entry.getValue().getTimestamp().getTime()));
+                        ps.setLong(3, entry.getKey());
+                        ps.setLong(4, projectId);
+                        ps.setLong(5, entry.getValue().getPolicyCondition().getId());
+                        ps.setString(6, entry.getValue().getType().name());
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+
+                    final ResultSet rs = ps.getGeneratedKeys();
+                    while (rs.next()) {
+                        newViolationIds.add(rs.getLong(1));
+                    }
+                }
+            }
+
+            if (!violationIdsToDelete.isEmpty()) {
+                final Array violationIdsToDeleteArray =
+                        nativeConnection.createArrayOf("BIGINT", violationIdsToDelete.toArray(new Long[0]));
+
+                try (final PreparedStatement ps = nativeConnection.prepareStatement("""
+                        DELETE FROM
+                          "VIOLATIONANALYSISCOMMENT" AS "VAC"
+                        USING
+                          "VIOLATIONANALYSIS" AS "VA"
+                        WHERE
+                          "VAC"."VIOLATIONANALYSIS_ID" = "VA"."ID"
+                          AND "VA"."POLICYVIOLATION_ID" = ANY(?)
+                        """)) {
+                    ps.setArray(1, violationIdsToDeleteArray);
+                    ps.execute();
+                }
+
+                try (final PreparedStatement ps = nativeConnection.prepareStatement("""
+                        DELETE FROM
+                          "VIOLATIONANALYSIS"
+                        WHERE
+                          "POLICYVIOLATION_ID" = ANY(?)
+                        """)) {
+                    ps.setArray(1, violationIdsToDeleteArray);
+                    ps.execute();
+                }
+
+                try (final PreparedStatement ps = nativeConnection.prepareStatement("""
+                        DELETE FROM
+                          "POLICYVIOLATION"
+                        WHERE
+                          "ID" = ANY(?)
+                        """)) {
+                    ps.setArray(1, violationIdsToDeleteArray);
+                    ps.execute();
+                }
+            }
+
+            nativeConnection.commit();
+        } catch (Exception e) {
+            try {
+                nativeConnection.rollback();
+            } catch (SQLException ex) {
+                throw new RuntimeException(ex);
+            }
+            throw new RuntimeException(e);
+        } finally {
+            try {
+                if (originalAutoCommit != null) {
+                    nativeConnection.setAutoCommit(originalAutoCommit);
+                }
+                if (originalTrxIsolation != null) {
+                    nativeConnection.setTransactionIsolation(originalTrxIsolation);
+                }
+            } catch (SQLException e) {
+                LOGGER.error("Failed to restore original connection settings (autoCommit=%s, trxIsolation=%d)"
+                        .formatted(originalAutoCommit, originalTrxIsolation), e);
+            }
+            jdoConnection.close();
+        }
+
+        return newViolationIds;
+    }
+
     List<Long> reconcileViolations(final long projectId, final MultiValuedMap<Long, PolicyViolation> reportedViolationsByComponentId) {
         // We want to send notifications for newly identified policy violations,
         // so need to keep track of which violations we created.
@@ -323,7 +537,8 @@ class CelPolicyQueryManager implements AutoCloseable {
             nativeConnection.setAutoCommit(false);
             nativeConnection.setTransactionIsolation(TRANSACTION_READ_COMMITTED);
 
-            // First, query for all existing policy violations of the project, grouping them by component ID.
+            // First, query for all existing component policy violations of the project, grouping them by component ID.
+            // Filter by COMPONENT_ID IS NOT NULL to exclude crypto asset violations (handled by reconcileCryptoViolations).
             final var existingViolationsByComponentId = new HashSetValuedHashMap<Long, PolicyViolationProjection>();
             try (final PreparedStatement ps = nativeConnection.prepareStatement("""
                     SELECT
@@ -334,6 +549,7 @@ class CelPolicyQueryManager implements AutoCloseable {
                       "POLICYVIOLATION"
                     WHERE
                       "PROJECT_ID" = ?
+                      AND "COMPONENT_ID" IS NOT NULL
                     """)) {
                 ps.setLong(1, projectId);
 

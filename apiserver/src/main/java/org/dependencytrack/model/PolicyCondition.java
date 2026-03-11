@@ -82,7 +82,16 @@ public class PolicyCondition implements Serializable {
         CWE(PolicyViolation.Type.SECURITY),
         VULNERABILITY_ID(PolicyViolation.Type.SECURITY),
         VERSION_DISTANCE(PolicyViolation.Type.OPERATIONAL),
-        EPSS(PolicyViolation.Type.SECURITY);
+        EPSS(PolicyViolation.Type.SECURITY),
+        CRYPTO_ALGORITHM_NAME(PolicyViolation.Type.SECURITY),
+        CRYPTO_ALGORITHM_PRIMITIVE(PolicyViolation.Type.SECURITY),
+        CRYPTO_ALGORITHM_PARAMETER_SET(PolicyViolation.Type.SECURITY),
+        CRYPTO_QUANTUM_SECURITY(PolicyViolation.Type.SECURITY),
+        CRYPTO_CLASSICAL_STRENGTH(PolicyViolation.Type.SECURITY),
+        CRYPTO_PROTOCOL_VERSION(PolicyViolation.Type.SECURITY),
+        CRYPTO_CERTIFICATE_EXPIRY(PolicyViolation.Type.SECURITY),
+        CRYPTO_CERTIFICATE_ALGORITHM(PolicyViolation.Type.SECURITY),
+        CRYPTO_MATERIAL_TYPE(PolicyViolation.Type.SECURITY);
 
         private final PolicyViolation.Type violationType;
 

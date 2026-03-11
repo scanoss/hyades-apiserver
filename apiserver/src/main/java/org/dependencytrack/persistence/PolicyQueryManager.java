@@ -173,7 +173,7 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
     public List<PolicyViolation> getAllPolicyViolations(final PolicyCondition policyCondition) {
         final Query<PolicyViolation> query = pm.newQuery(PolicyViolation.class, "policyCondition.id == :pid");
         if (orderBy == null) {
-            query.setOrdering("timestamp desc, project.name, project.version, component.name, component.version");
+            query.setOrdering("timestamp desc, project.name, project.version");
         }
         return (List<PolicyViolation>)query.execute(policyCondition.getId());
     }
@@ -209,7 +209,7 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
             query.addSubquery(subQuery, "long suppressions", null, "this");
         }
         if (orderBy == null) {
-            query.setOrdering("timestamp desc, project.name, project.version, component.name, component.version");
+            query.setOrdering("timestamp desc, project.name, project.version");
         }
         query.setParameters(component.getId());
         return query.executeList();
@@ -224,7 +224,7 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
     public List<PolicyViolation> getAllPolicyViolations(final Project project) {
         final Query<PolicyViolation> query = pm.newQuery(PolicyViolation.class, "project.id == :pid");
         if (orderBy == null) {
-            query.setOrdering("timestamp desc, component.name, component.version");
+            query.setOrdering("timestamp desc");
         }
         return (List<PolicyViolation>)query.execute(project.getId());
     }
@@ -240,10 +240,10 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
         final String queryFilter = includeSuppressed ? "project.id == :pid" : "project.id == :pid && (analysis.suppressed == false || analysis.suppressed == null)";
         final Query<PolicyViolation> query = pm.newQuery(PolicyViolation.class);
         if (orderBy == null) {
-            query.setOrdering("timestamp desc, component.name, component.version");
+            query.setOrdering("timestamp desc");
         }
         if (filter != null) {
-            query.setFilter(queryFilter + " && (policyCondition.policy.name.toLowerCase().matches(:filter) || component.name.toLowerCase().matches(:filter))");
+            query.setFilter(queryFilter + " && policyCondition.policy.name.toLowerCase().matches(:filter)");
             final String filterString = ".*" + filter.toLowerCase() + ".*";
             result = execute(query, project.getId(), filterString);
         } else {
@@ -251,9 +251,11 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
             result = execute(query, project.getId());
         }
         for (final PolicyViolation violation: result.getList(PolicyViolation.class)) {
-            violation.getPolicyCondition().getPolicy(); // force policy to ne included since its not the default
-            violation.getComponent().getResolvedLicense(); // force resolved license to ne included since its not the default
-            violation.setAnalysis(getViolationAnalysis(violation.getComponent(), violation)); // Include the violation analysis by default
+            violation.getPolicyCondition().getPolicy(); // force policy to be included since its not the default
+            if (violation.getComponent() != null) {
+                violation.getComponent().getResolvedLicense(); // force resolved license to be included since its not the default
+                violation.setAnalysis(getViolationAnalysis(violation.getComponent(), violation)); // Include the violation analysis by default
+            }
         }
         return result;
     }
@@ -276,9 +278,11 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
         }
         final PaginatedResult result = execute(query, component.getId());
         for (final PolicyViolation violation: result.getList(PolicyViolation.class)) {
-            violation.getPolicyCondition().getPolicy(); // force policy to ne included since its not the default
-            violation.getComponent().getResolvedLicense(); // force resolved license to ne included since its not the default
-            violation.setAnalysis(getViolationAnalysis(violation.getComponent(), violation)); // Include the violation analysis by default
+            violation.getPolicyCondition().getPolicy(); // force policy to be included since its not the default
+            if (violation.getComponent() != null) {
+                violation.getComponent().getResolvedLicense(); // force resolved license to be included since its not the default
+                violation.setAnalysis(getViolationAnalysis(violation.getComponent(), violation)); // Include the violation analysis by default
+            }
         }
         return result;
     }
@@ -301,15 +305,17 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
         }
         processViolationsFilters(filters, params, filterCriteria);
         if (orderBy == null) {
-            query.setOrdering("timestamp desc, project.name, project.version, component.name, component.version");
+            query.setOrdering("timestamp desc, project.name, project.version");
         }
         final String queryFilter = String.join(" && ", filterCriteria);
         preprocessACLs(query, queryFilter, params);
         result = execute(query, params);
         for (final PolicyViolation violation: result.getList(PolicyViolation.class)) {
             violation.getPolicyCondition().getPolicy(); // force policy to be included since it's not the default
-            violation.getComponent().getResolvedLicense(); // force resolved license to be included since it's not the default
-            violation.setAnalysis(getViolationAnalysis(violation.getComponent(), violation)); // Include the violation analysis by default
+            if (violation.getComponent() != null) {
+                violation.getComponent().getResolvedLicense(); // force resolved license to be included since it's not the default
+                violation.setAnalysis(getViolationAnalysis(violation.getComponent(), violation)); // Include the violation analysis by default
+            }
         }
         return result;
     }

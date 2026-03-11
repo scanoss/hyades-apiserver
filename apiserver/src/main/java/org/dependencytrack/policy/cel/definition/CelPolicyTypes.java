@@ -20,6 +20,11 @@ package org.dependencytrack.policy.cel.definition;
 
 import com.google.api.expr.v1alpha1.Type;
 import org.dependencytrack.proto.policy.v1.Component;
+import org.dependencytrack.proto.policy.v1.CryptoAlgorithm;
+import org.dependencytrack.proto.policy.v1.CryptoAsset;
+import org.dependencytrack.proto.policy.v1.CryptoCertificate;
+import org.dependencytrack.proto.policy.v1.CryptoProtocol;
+import org.dependencytrack.proto.policy.v1.CryptoRelatedMaterial;
 import org.dependencytrack.proto.policy.v1.License;
 import org.dependencytrack.proto.policy.v1.Project;
 import org.dependencytrack.proto.policy.v1.Tools;
@@ -40,5 +45,10 @@ public class CelPolicyTypes {
     public static final Type TYPE_VULNERABILITIES = Decls.newListType(TYPE_VULNERABILITY);
     public static final Type TYPE_VULNERABILITY_ALIAS = Decls.newObjectType(Vulnerability.Alias.getDescriptor().getFullName());
     public static final Type TYPE_VERSION_DISTANCE = Decls.newObjectType(VersionDistance.getDescriptor().getFullName());
+    public static final Type TYPE_CRYPTO_ASSET = Decls.newObjectType(CryptoAsset.getDescriptor().getFullName());
+    public static final Type TYPE_CRYPTO_ALGORITHM = Decls.newObjectType(CryptoAlgorithm.getDescriptor().getFullName());
+    public static final Type TYPE_CRYPTO_CERTIFICATE = Decls.newObjectType(CryptoCertificate.getDescriptor().getFullName());
+    public static final Type TYPE_CRYPTO_PROTOCOL = Decls.newObjectType(CryptoProtocol.getDescriptor().getFullName());
+    public static final Type TYPE_CRYPTO_RELATED_MATERIAL = Decls.newObjectType(CryptoRelatedMaterial.getDescriptor().getFullName());
 
 }

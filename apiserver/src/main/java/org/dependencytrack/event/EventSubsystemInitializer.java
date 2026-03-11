@@ -60,6 +60,7 @@ import org.dependencytrack.tasks.maintenance.VulnerabilityScanMaintenanceTask;
 import org.dependencytrack.tasks.maintenance.WorkflowMaintenanceTask;
 import org.dependencytrack.tasks.metrics.PortfolioMetricsUpdateTask;
 import org.dependencytrack.tasks.metrics.ProjectMetricsUpdateTask;
+import org.dependencytrack.tasks.metrics.CryptoMetricsUpdateTask;
 import org.dependencytrack.tasks.metrics.VulnerabilityMetricsUpdateTask;
 import org.dependencytrack.tasks.vulnerabilitypolicy.VulnerabilityPolicyFetchTask;
 import org.eclipse.microprofile.config.Config;
@@ -137,6 +138,7 @@ public class EventSubsystemInitializer implements ServletContextListener {
         eventService.subscribe(ProjectPolicyEvaluationEvent.class, new PolicyEvaluationTask());
         eventService.subscribe(IntegrityMetaInitializerEvent.class, new IntegrityMetaInitializerTask());
         eventService.subscribe(IntegrityAnalysisEvent.class, new IntegrityAnalysisTask());
+        eventService.subscribe(CryptoMetricsUpdateEvent.class, new CryptoMetricsUpdateTask());
 
         // Execute maintenance tasks on the single-threaded event service.
         // This way, they are not blocked by, and don't block, actual processing tasks on the main event service.
@@ -179,6 +181,7 @@ public class EventSubsystemInitializer implements ServletContextListener {
         eventService.unsubscribe(IntegrityMetaInitializerTask.class);
         eventService.unsubscribe(IntegrityAnalysisTask.class);
         eventService.unsubscribe(VulnerabilityPolicyFetchTask.class);
+        eventService.unsubscribe(CryptoMetricsUpdateTask.class);
         try {
             eventService.shutdown(drainTimeout);
         } catch (TimeoutException e) {

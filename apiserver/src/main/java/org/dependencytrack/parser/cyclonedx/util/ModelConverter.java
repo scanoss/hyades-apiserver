@@ -43,6 +43,13 @@ import org.dependencytrack.model.Classifier;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ComponentOccurrence;
 import org.dependencytrack.model.ComponentProperty;
+import org.dependencytrack.model.CryptoAsset;
+import org.dependencytrack.model.CryptoAssetAlgorithm;
+import org.dependencytrack.model.CryptoAssetCertificate;
+import org.dependencytrack.model.CryptoAssetProtocol;
+import org.dependencytrack.model.CryptoAssetRelatedMaterial;
+import org.dependencytrack.model.CryptoAssetType;
+import org.dependencytrack.model.CryptoPrimitive;
 import org.dependencytrack.model.Cwe;
 import org.dependencytrack.model.DataClassification;
 import org.dependencytrack.model.ExternalReference;
@@ -51,6 +58,7 @@ import org.dependencytrack.model.OrganizationalContact;
 import org.dependencytrack.model.OrganizationalEntity;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.ProjectMetadata;
+import org.dependencytrack.model.RelatedCryptoMaterialType;
 import org.dependencytrack.model.ServiceComponent;
 import org.dependencytrack.model.Severity;
 import org.dependencytrack.model.Tools;
@@ -186,7 +194,9 @@ public class ModelConverter {
             return Collections.emptyList();
         }
 
-        return cdxComponents.stream().map(ModelConverter::convertComponent).toList();
+        return cdxComponents.stream()
+                .filter(c -> c.getType() != org.cyclonedx.model.Component.Type.CRYPTOGRAPHIC_ASSET)
+                .map(ModelConverter::convertComponent).toList();
     }
 
     public static Component convertComponent(final org.cyclonedx.model.Component cdxComponent) {
@@ -1305,5 +1315,149 @@ public class ModelConverter {
                 .map(finding -> convert(qm, variant, finding))
                 .filter(vulnerabilitiesSeen::add)
                 .toList();
+    }
+
+    /**
+     * Converts crypto asset components from raw CycloneDX BOM JSON bytes.
+     * Filters components by type "cryptographic-asset" and extracts cryptoProperties.
+     */
+    public static List<CryptoAsset> convertCryptoAssetsFromJson(final byte[] bomBytes, final Project project) {
+        final List<CryptoAsset> cryptoAssets = new ArrayList<>();
+        try {
+            final org.json.JSONObject bom = new org.json.JSONObject(new String(bomBytes, java.nio.charset.StandardCharsets.UTF_8));
+            final org.json.JSONArray components = bom.optJSONArray("components");
+            if (components == null) return cryptoAssets;
+
+            for (int i = 0; i < components.length(); i++) {
+                final org.json.JSONObject comp = components.getJSONObject(i);
+                final String type = comp.optString("type", "");
+                if (!"cryptographic-asset".equals(type)) continue;
+
+                final org.json.JSONObject cryptoProps = comp.optJSONObject("cryptoProperties");
+                if (cryptoProps == null) continue;
+
+                final CryptoAsset asset = new CryptoAsset();
+                asset.setProject(project);
+                asset.setName(comp.optString("name", "unknown"));
+                asset.setBomRef(comp.optString("bom-ref", null));
+                asset.setDescription(comp.optString("description", null));
+
+                final String assetTypeStr = cryptoProps.optString("assetType", "");
+                asset.setAssetType(mapCryptoAssetType(assetTypeStr));
+                asset.setOid(cryptoProps.optString("oid", null));
+
+                // Occurrences
+                final org.json.JSONArray occurrences = cryptoProps.optJSONArray("occurrences");
+                if (occurrences != null) {
+                    asset.setOccurrences(occurrences.toString());
+                }
+
+                // Type-specific properties
+                switch (asset.getAssetType()) {
+                    case ALGORITHM -> {
+                        final org.json.JSONObject algProps = cryptoProps.optJSONObject("algorithmProperties");
+                        if (algProps != null) {
+                            asset.setAlgorithm(convertAlgorithmProperties(algProps));
+                        }
+                    }
+                    case CERTIFICATE -> {
+                        final org.json.JSONObject certProps = cryptoProps.optJSONObject("certificateProperties");
+                        if (certProps != null) {
+                            asset.setCertificate(convertCertificateProperties(certProps));
+                        }
+                    }
+                    case PROTOCOL -> {
+                        final org.json.JSONObject protoProps = cryptoProps.optJSONObject("protocolProperties");
+                        if (protoProps != null) {
+                            asset.setProtocol(convertProtocolProperties(protoProps));
+                        }
+                    }
+                    case RELATED_CRYPTO_MATERIAL -> {
+                        final org.json.JSONObject matProps = cryptoProps.optJSONObject("relatedCryptoMaterialProperties");
+                        if (matProps != null) {
+                            asset.setRelatedMaterial(convertRelatedMaterialProperties(matProps));
+                        }
+                    }
+                }
+
+                cryptoAssets.add(asset);
+            }
+        } catch (Exception e) {
+            // Log but don't fail BOM processing
+            LOGGER.warn("Failed to parse crypto assets from BOM", e);
+        }
+        return cryptoAssets;
+    }
+
+    private static CryptoAssetType mapCryptoAssetType(final String value) {
+        return switch (value.toLowerCase().replace("-", "_").replace(" ", "_")) {
+            case "algorithm" -> CryptoAssetType.ALGORITHM;
+            case "protocol" -> CryptoAssetType.PROTOCOL;
+            case "certificate" -> CryptoAssetType.CERTIFICATE;
+            case "related_crypto_material", "related-crypto-material" -> CryptoAssetType.RELATED_CRYPTO_MATERIAL;
+            default -> CryptoAssetType.ALGORITHM;
+        };
+    }
+
+    private static CryptoAssetAlgorithm convertAlgorithmProperties(final org.json.JSONObject props) {
+        final var alg = new CryptoAssetAlgorithm();
+        final String primitive = props.optString("primitive", null);
+        if (primitive != null) {
+            try {
+                alg.setPrimitive(CryptoPrimitive.valueOf(primitive.toUpperCase().replace("-", "_").replace(" ", "_")));
+            } catch (IllegalArgumentException ignored) {}
+        }
+        alg.setAlgorithmMode(props.optString("mode", null));
+        alg.setPadding(props.optString("padding", null));
+        alg.setParameterSetIdentifier(props.optString("parameterSetIdentifier", null));
+        alg.setCurve(props.optString("curve", null));
+        final org.json.JSONArray funcs = props.optJSONArray("cryptoFunctions");
+        if (funcs != null) alg.setCryptoFunctions(funcs.toString());
+        if (props.has("classicalSecurityLevel")) alg.setClassicalSecurityLevel(props.optInt("classicalSecurityLevel"));
+        if (props.has("nistQuantumSecurityLevel")) alg.setNistQuantumSecurityLevel(props.optInt("nistQuantumSecurityLevel"));
+        return alg;
+    }
+
+    private static CryptoAssetCertificate convertCertificateProperties(final org.json.JSONObject props) {
+        final var cert = new CryptoAssetCertificate();
+        cert.setSubjectName(props.optString("subjectName", null));
+        cert.setIssuerName(props.optString("issuerName", null));
+        final String notBefore = props.optString("notValidBefore", null);
+        if (notBefore != null) {
+            try { cert.setNotValidBefore(java.util.Date.from(java.time.Instant.parse(notBefore))); } catch (Exception ignored) {}
+        }
+        final String notAfter = props.optString("notValidAfter", null);
+        if (notAfter != null) {
+            try { cert.setNotValidAfter(java.util.Date.from(java.time.Instant.parse(notAfter))); } catch (Exception ignored) {}
+        }
+        cert.setSignatureAlgorithmRef(props.optString("signatureAlgorithmRef", null));
+        cert.setSubjectPublicKeyRef(props.optString("subjectPublicKeyRef", null));
+        cert.setCertificateFormat(props.optString("certificateFormat", null));
+        cert.setCertificateExtension(props.optString("certificateExtension", null));
+        return cert;
+    }
+
+    private static CryptoAssetProtocol convertProtocolProperties(final org.json.JSONObject props) {
+        final var proto = new CryptoAssetProtocol();
+        proto.setProtocolType(props.optString("type", null));
+        proto.setProtocolVersion(props.optString("version", null));
+        final org.json.JSONArray suites = props.optJSONArray("cipherSuites");
+        if (suites != null) proto.setCipherSuites(suites.toString());
+        return proto;
+    }
+
+    private static CryptoAssetRelatedMaterial convertRelatedMaterialProperties(final org.json.JSONObject props) {
+        final var mat = new CryptoAssetRelatedMaterial();
+        final String typeStr = props.optString("type", null);
+        if (typeStr != null) {
+            try {
+                mat.setType(RelatedCryptoMaterialType.valueOf(typeStr.toUpperCase().replace("-", "_").replace(" ", "_")));
+            } catch (IllegalArgumentException ignored) {}
+        }
+        if (props.has("size")) mat.setMaterialSize(props.optInt("size"));
+        mat.setMaterialFormat(props.optString("format", null));
+        mat.setAlgorithmRef(props.optString("algorithmRef", null));
+        // Security: Do NOT store raw key value
+        return mat;
     }
 }

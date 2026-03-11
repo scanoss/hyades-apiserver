@@ -117,6 +117,38 @@ BEGIN
     "v_policy_violations_security_audited",
     "v_policy_violations_security_unaudited";
 
+  -- Add crypto asset policy violations (which have CRYPTOASSET_ID set, no COMPONENT_ID).
+  -- These are not tracked in DEPENDENCYMETRICS, so count them directly.
+  SELECT
+    "v_policy_violations_total"     + COALESCE(COUNT(*)::INT, 0),
+    "v_policy_violations_fail"      + COALESCE(SUM(CASE WHEN "P"."VIOLATIONSTATE" = 'FAIL' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_warn"      + COALESCE(SUM(CASE WHEN "P"."VIOLATIONSTATE" = 'WARN' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_info"      + COALESCE(SUM(CASE WHEN "P"."VIOLATIONSTATE" = 'INFO' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_unaudited" + COALESCE(COUNT(*)::INT, 0),
+    "v_policy_violations_license_total"     + COALESCE(SUM(CASE WHEN "PV"."TYPE" = 'LICENSE' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_license_unaudited" + COALESCE(SUM(CASE WHEN "PV"."TYPE" = 'LICENSE' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_operational_total"     + COALESCE(SUM(CASE WHEN "PV"."TYPE" = 'OPERATIONAL' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_operational_unaudited" + COALESCE(SUM(CASE WHEN "PV"."TYPE" = 'OPERATIONAL' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_security_total"     + COALESCE(SUM(CASE WHEN "PV"."TYPE" = 'SECURITY' THEN 1 ELSE 0 END)::INT, 0),
+    "v_policy_violations_security_unaudited" + COALESCE(SUM(CASE WHEN "PV"."TYPE" = 'SECURITY' THEN 1 ELSE 0 END)::INT, 0)
+  FROM "POLICYVIOLATION" "PV"
+  INNER JOIN "POLICYCONDITION" "PC" ON "PC"."ID" = "PV"."POLICYCONDITION_ID"
+  INNER JOIN "POLICY" "P" ON "P"."ID" = "PC"."POLICY_ID"
+  WHERE "PV"."PROJECT_ID" = "v_project_id"
+    AND "PV"."CRYPTOASSET_ID" IS NOT NULL
+  INTO
+    "v_policy_violations_total",
+    "v_policy_violations_fail",
+    "v_policy_violations_warn",
+    "v_policy_violations_info",
+    "v_policy_violations_unaudited",
+    "v_policy_violations_license_total",
+    "v_policy_violations_license_unaudited",
+    "v_policy_violations_operational_total",
+    "v_policy_violations_operational_unaudited",
+    "v_policy_violations_security_total",
+    "v_policy_violations_security_unaudited";
+
   "v_risk_score" = "CALC_RISK_SCORE"("v_critical", "v_high", "v_medium", "v_low", "v_unassigned");
 
   INSERT INTO "PROJECTMETRICS" ("PROJECT_ID",
